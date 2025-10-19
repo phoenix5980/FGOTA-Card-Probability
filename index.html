@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>FGO 发牌概率计算器</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#0b0d10; --card:#151a21; --ink:#eef2f7; --muted:#9aa7b4; --acc:#55b3ff }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial}
+    .wrap{max-width:1000px;margin:0 auto;padding:28px}
+    h1{font-weight:700;margin:0 0 18px}
+    .row{display:flex;flex-wrap:wrap;gap:12px}
+    .card{background:var(--card);border-radius:14px;padding:16px 18px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+    .col{flex:1 1 280px;min-width:280px}
+    label{display:block;font-size:12px;color:var(--muted);letter-spacing:.02em;margin-bottom:6px}
+    select,input[type=text]{width:100%;padding:10px 12px;border-radius:10px;border:1px solid #263041;background:#0e1217;color:var(--ink)}
+    .turns{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+    .note{color:var(--muted);font-size:13px;margin-top:8px}
+    .btn{appearance:none;border:0;border-radius:10px;padding:10px 14px;background:var(--acc);color:#04213a;cursor:pointer;font-weight:700}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .result{font:700 18px/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin-top:16px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .muted{color:var(--muted)}
+    .kbd{background:#0e1217;border:1px solid #2a3542;border-bottom-color:#202a36;border-radius:6px;padding:1px 6px;font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cfe5ff}
+    a{color:#9cd0ff;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>FGO 发牌概率计算器</h1>
+
+    <div class="row">
+      <div class="card col">
+        <label>模式</label>
+        <select id="mode">
+          <option value="3p-fixed">三人 不洗牌（3回合共享）</option>
+          <option value="2p-fixed">二人 不洗牌（2回合共享）</option>
+          <option value="3p-shuffle">三人 洗牌（每回合独立）</option>
+          <option value="2p-shuffle">二人 洗牌（每回合独立）</option>
+        </select>
+        <div class="note">不洗牌=一次抽满 15/10 张，按顺序 T1/T2/T3 分段判定；洗牌=每回合独立抽 5 张。</div>
+      </div>
+
+      <div class="card col">
+        <label>主手配卡</label>
+        <select id="group">
+          <option value="BBBAQ">BBBAQ（三红）</option>
+          <option value="BBAAQ">BBAAQ（二红二蓝）</option>
+          <option value="BAAAQ">BAAAQ（三蓝）</option>
+          <option value="BAAQQ">BAAQQ（二绿二蓝）</option>
+          <option value="BBAQQ" selected>BBAQQ（二红二绿）</option>
+          <option value="BAQQQ">BAQQQ（三绿）</option>
+        </select>
+        <div class="note">目前只按卡色（B/A/Q）建模，不区分 B1/B2、Q1/Q2、A1/A2等。</div>
+      </div>
+    </div>
+
+    <div class="card" id="turns-card">
+      <label>回合要求（OR-of-ANDs，预设可选）</label>
+      <div class="turns" id="turns"></div>
+      <div class="note">
+        预设已按配卡自动生成所有可行组合（例如 B / A / Q / BB / AA / BQ / BA / AQ / BBA / BBQ / BAA / BAQ / AAQ / BBAA / BBAQ / BAAQ / BBAAQ 等）。
+        也可用自定义语法：例如 <span class="kbd">BB|BQ</span>（表示 BB 或 BQ），<span class="kbd">A+Q</span>（A 与 Q），<span class="kbd">QQ</span>（两张 Q）。多个 OR 用 <span class="kbd">|</span> 分隔；AND 用重复字母或 <span class="kbd">+</span>。
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card col">
+        <label>&nbsp;</label>
+        <button class="btn" id="calc">计算</button>
+        <div class="result" id="result">—</div>
+        <div class="note" id="status"></div>
+      </div>
+    </div>
+
+    <div class="note">
+      示例：BBAQQ + 三人不洗牌，T1:A，T2:Q，T3:(BQ 或 BB) 的结果应为 6250/90090 ≈ 6.9375%
+    </div>
+
+  </div>
+
+<script>
+/* ============== 工具 ============== */
+const C = (n,k)=> (k<0||k>n)?0:fact(n)/(fact(k)*fact(n-k));
+const fact = (n)=>{let r=1;for(let i=2;i<=n;i++)r*=i;return r};
+const gcd = (a,b)=> b?gcd(b,a%b):Math.abs(a);
+
+/* ============== 数据模型 ============== */
+const GROUPS = {
+  BBBAQ:{B:3,A:1,Q:1},
+  BBAAQ:{B:2,A:2,Q:1},
+  BAAAQ:{B:1,A:3,Q:1},
+  BAAQQ:{B:1,A:2,Q:2},
+  BBAQQ:{B:2,A:1,Q:2},
+  BAQQQ:{B:1,A:1,Q:3},
+};
+function groupToList(g){ return Array(g.B).fill('B').concat(Array(g.A).fill('A'), Array(g.Q).fill('Q')); }
+
+/* TurnSpec: OR-of-ANDs，形如 [{B:2},{B:1,Q:1}] => “BB 或 BQ” */
+function evalSegment(segment, anyOf){
+  if(!anyOf || anyOf.length===0) return true; // 无要求 => 恒真
+  const cnt = {B:0,A:0,Q:0};
+  for(const c of segment) if(c==='B'||c==='A'||c==='Q') cnt[c]++;
+  for(const conj of anyOf){
+    let ok = true;
+    for(const k in conj){
+      if((cnt[k]||0) < conj[k]){ ok=false; break; }
+    }
+    if(ok) return true;
+  }
+  return false;
+}
+
+/* ============== 动态预设：根据配卡列出所有可行的 AND 组合（B/A/Q 的字符串），不含“至少”字样 ============== */
+// 动态预设：根据配卡列出所有可行的 AND 组合（B/A/Q 的字符串），不含“至少”字样
+function presetsForGroup(group){
+  const out = [{label:'无要求', spec:[]}];
+  // 按长度 1..5 分段排序，便于浏览（单字母 → 两字母 → 三字母 ...）
+  for(let s=1; s<=5; s++){
+    for(let b=0; b<=Math.min(group.B, s); b++){
+      for(let a=0; a<=Math.min(group.A, s-b); a++){
+        const q = s - b - a;
+        if(q < 0 || q > group.Q) continue;
+        // 构造标签与约束（"BBAQ" → {B:2,A:1,Q:1})
+        const label = 'B'.repeat(b) + 'A'.repeat(a) + 'Q'.repeat(q);
+        if(label.length===0) continue;
+        const conj = {}; if(b) conj.B=b; if(a) conj.A=a; if(q) conj.Q=q;
+        out.push({ label, spec: [conj] });
+      }
+    }
+  }
+  return out;
+}
+
+// 根据最大可用数量生成预设（与 presetsForGroup 相同逻辑，但接受一个 {B,A,Q} 上限）
+function presetsForMax(max){
+  const out = [{label:'无要求', spec:[]}];
+  for(let s=1; s<=5; s++){
+    for(let b=0; b<=Math.min(max.B, s); b++){
+      for(let a=0; a<=Math.min(max.A, s-b); a++){
+        const q = s - b - a;
+        if(q < 0 || q > max.Q) continue;
+        const label = 'B'.repeat(b) + 'A'.repeat(a) + 'Q'.repeat(q);
+        if(label.length===0) continue;
+        const conj = {}; if(b) conj.B=b; if(a) conj.A=a; if(q) conj.Q=q;
+        out.push({ label, spec: [conj] });
+      }
+    }
+  }
+  return out;
+}
+
+// 计算一个 OR-of-ANDs 约束的“最小必需消耗”（逐类型取最小）
+function minConsumption(anyOf){
+  if(!anyOf || anyOf.length===0) return {B:0,A:0,Q:0};
+  const types = ['B','A','Q'];
+  const m = {B:Infinity, A:Infinity, Q:Infinity};
+  for(const t of types){
+    let best = Infinity;
+    for(const conj of anyOf){
+      const need = (conj[t]||0);
+      if(need < best) best = need;
+    }
+    m[t] = (best===Infinity ? 0 : best);
+  }
+  return m;
+}
+
+function getTurnSpec(idx, group){
+  const row = turnRows[idx];
+  if(!row) return [];
+  const presets = row.sel._presets || presetsForGroup(group);
+  const preset = presets[Number(row.sel.value)]?.spec || [];
+  const custom = parseSpec(row.custom.value);
+  return (custom.length ? custom : preset);
+}
+
+function remainingBeforeTurn(idx, group){
+  // 从 T1 累加到 T(idx-1) 的最小消耗，得到在 T_idx 前可用的最大余量
+  const rem = {B:group.B, A:group.A, Q:group.Q};
+  for(let i=0;i<idx;i++){
+    const spec = getTurnSpec(i, group);
+    const c = minConsumption(spec);
+    rem.B = Math.max(0, rem.B - c.B);
+    rem.A = Math.max(0, rem.A - c.A);
+    rem.Q = Math.max(0, rem.Q - c.Q);
+  }
+  return rem;
+}
+
+function updateFeasibleFrom(startIdx){
+  const mode = elMode.value;
+  if(!(mode==='3p-fixed' || mode==='2p-fixed')) return; // 仅在“不洗牌/共享”时动态过滤
+  const group = GROUPS[elGroup.value];
+  const turns = turnRows.length;
+  for(let i=startIdx+1; i<turns; i++){
+    const rem = remainingBeforeTurn(i, group);
+    const newPresets = presetsForMax(rem);
+    const sel = turnRows[i].sel;
+    // 记住旧选择的标签，尽量保留
+    const oldPresets = sel._presets || [];
+    const oldLabel = (oldPresets[Number(sel.value)]||{}).label;
+    sel._presets = newPresets;
+    sel.innerHTML = newPresets.map((p,idx)=>`<option value="${idx}">${p.label}</option>`).join('');
+    let idx = newPresets.findIndex(p=>p.label===oldLabel);
+    if(idx < 0) idx = newPresets.findIndex(p=>p.label==='无要求');
+    if(idx < 0) idx = 0;
+    sel.value = String(idx);
+  }
+}
+
+/* ============== 洗牌（每回合独立） ============== */
+function singleTurnShuffleCounts(totalCards, group, anyOf){
+  const totalHands = C(totalCards, 5);
+  let acc = 0;
+  for(let b=0;b<=Math.min(5,group.B);b++){
+    for(let a=0;a<=Math.min(5-b,group.A);a++){
+      for(let q=0;q<=Math.min(5-b-a,group.Q);q++){
+        const other = 5 - b - a - q;
+        if(other<0) continue;
+        const ways = C(group.B,b)*C(group.A,a)*C(group.Q,q)*C(totalCards - (group.B+group.A+group.Q), other);
+        const seg = Array(b).fill('B').concat(Array(a).fill('A'), Array(q).fill('Q'), Array(other).fill('O'));
+        if(evalSegment(seg, anyOf)) acc += ways;
+      }
+    }
+  }
+  return [acc, totalHands];
+}
+function acrossTurnsShuffleCounts(totalCards, group, specs){
+  // 所有回合都满足 => 乘积；无要求的回合视为 1/1，不参与放大分子分母
+  let num=1n, den=1n;
+  for(const s of specs){
+    if(!s || s.length===0){
+      continue; // 无要求 => 乘以 1/1
+    }
+    const [n,d] = singleTurnShuffleCounts(totalCards, group, s);
+    num *= BigInt(n); den *= BigInt(d);
+  }
+  return [Number(num), Number(den)];
+}
+function bigGCD(a,b){ return b===0n ? (a<0n?-a:a) : bigGCD(b, a%b); }
+
+/* ============== 不洗牌（固定顺序，精确枚举） ============== */
+function uniquePermsMultiset(arr){
+  // 5! = 120，直接全排列 + Set 去重即可
+  const res = [];
+  const used = Array(arr.length).fill(false);
+  const a = arr.slice().sort(); // 需要跳重
+  function back(track){
+    if(track.length===a.length){ res.push(track.slice()); return; }
+    for(let i=0;i<a.length;i++){
+      if(used[i]) continue;
+      if(i>0 && a[i]===a[i-1] && !used[i-1]) continue; // 关键：跳过相同元素的同层分支
+      used[i]=true; track.push(a[i]);
+      back(track);
+      track.pop(); used[i]=false;
+    }
+  }
+  back([]);
+  return res; // 最多 30 种
+}
+
+function fixedCounts(totalCards, numTurns, group, specs){
+  const hand = groupToList(group); // 长度 5
+  const perms = uniquePermsMultiset(hand);
+  let valid = 0, total = 0;
+  // 选择你 5 张牌落到 15/10 个位置中的哪 5 个
+  const positions = [...Array(totalCards).keys()];
+  for(const posCombo of combinationsK(positions, 5)){
+    const pos = posCombo.slice().sort((x,y)=>x-y); // 必须排序，确保第 i 张卡放到更靠前的位置
+    for(const p of perms){
+      // 摆盘
+      const board = Array(totalCards).fill('O');
+      for(let i=0;i<5;i++) board[pos[i]] = p[i];
+      // 逐回合判定
+      let ok = true;
+      for(let t=0;t<numTurns;t++){
+        const seg = board.slice(t*5, (t+1)*5);
+        if(!evalSegment(seg, specs[t])){ ok=false; break; }
+      }
+      total++;
+      if(ok) valid++;
+    }
+  }
+  return [valid, total];
+}
+
+function* combinationsK(arr, k){
+  const n=arr.length;
+  const idx = Array.from({length:k}, (_,i)=>i);
+  const get = ()=> idx.map(i=>arr[i]);
+  if(k===0){ yield []; return; }
+  if(k>n) return;
+  yield get();
+  while(true){
+    let i=k-1;
+    while(i>=0 && idx[i]===i+n-k) i--;
+    if(i<0) return;
+    idx[i]++;
+    for(let j=i+1;j<k;j++) idx[j]=idx[j-1]+1;
+    yield get();
+  }
+}
+
+/* ============== UI ============== */
+const elMode = document.getElementById('mode');
+const elGroup = document.getElementById('group');
+const elTurns = document.getElementById('turns');
+const elCalc = document.getElementById('calc');
+const elResult = document.getElementById('result');
+const elStatus = document.getElementById('status');
+
+// 默认模式：三人洗牌
+elMode.value = '3p-shuffle';
+
+function buildTurnRow(i){
+  const wrap = document.createElement('div');
+  const label = document.createElement('label');
+  label.textContent = `T${i+1} 要求`;
+  const sel = document.createElement('select');
+  const presets = presetsForGroup(GROUPS[elGroup.value]);
+  sel.innerHTML = presets.map((p,idx)=>`<option value="${idx}">${p.label}</option>`).join('');
+  sel.value = String(presets.findIndex(p=>p.label==='无要求'));
+  sel._presets = presets;
+
+  const custom = document.createElement('input');
+  custom.type='text';
+  custom.placeholder='自定义: 例如 BB|BQ, A+Q, QQ';
+  // 监听当前回合修改，刷新后续回合的可行选项（仅在共享模式生效）
+  sel.addEventListener('change', ()=> updateFeasibleFrom(i));
+  custom.addEventListener('input', ()=> updateFeasibleFrom(i));
+
+  wrap.append(label, sel, custom);
+  wrap.className='card';
+  return {wrap, sel, custom};
+}
+
+let turnRows=[];
+function refreshTurns(){
+  const mode = elMode.value;
+  const total = mode.startsWith('3p')?15:10;
+  const turns = mode.startsWith('3p')?3:2; // 洗牌/不洗牌都显示各自的人数轮数
+  // elTotalCards.value = total;
+  // elNumTurns.value = turns;
+
+  elTurns.innerHTML = '';
+  turnRows = [];
+  for(let i=0;i<turns;i++){
+    const row = buildTurnRow(i);
+    turnRows.push(row);
+    elTurns.appendChild(row.wrap);
+  }
+  updateFeasibleFrom(-1);
+}
+elMode.addEventListener('change', refreshTurns);
+elGroup.addEventListener('change', refreshTurns);
+refreshTurns();
+
+elCalc.addEventListener('click', ()=>{
+  try{
+    elCalc.disabled = true;
+    elStatus.textContent = '计算中…';
+    setTimeout(()=>{ // 让 UI 有时间刷新
+      const mode = elMode.value;
+      const group = GROUPS[elGroup.value];
+      const totalCards = mode.startsWith('3p') ? 15 : 10;
+      const specs = turnRows.map(r=>{
+        const presets = r.sel._presets || presetsForGroup(group);
+        const preset = presets[Number(r.sel.value)]?.spec || [];
+        const custom = parseSpec(r.custom.value);
+        return (custom.length? custom : preset);
+      });
+
+      let num, den;
+      if(mode==='3p-fixed' || mode==='2p-fixed'){
+        [num, den] = fixedCounts(totalCards, specs.length, group, specs);
+      }else{
+        [num, den] = acrossTurnsShuffleCounts(totalCards, group, specs);
+      }
+      const percent = den ? (num/den*100) : 0;
+      const g = den ? gcd(num, den) : 1;
+      if(den === 0){
+        elResult.textContent = `0/0 = 0.000000%`;
+      }else if(g > 1){
+        elResult.textContent = `${num}/${den} = ${Math.floor(num/g)}/${Math.floor(den/g)} = ${percent.toFixed(6)}%`;
+      }else{
+        elResult.textContent = `${num}/${den} = ${percent.toFixed(6)}%`;
+      }
+      elStatus.textContent = '';
+    }, 20);
+  }catch(err){
+    console.error(err);
+    elStatus.textContent = '出错了：' + err.message;
+  }finally{
+    elCalc.disabled = false;
+  }
+});
+
+// 初始就自动计算一次
+elCalc.click();
+
+/* 自定义语法解析："BB|BQ", "A+Q", "QQ", "B+A", "BQQ" 等 */
+function parseSpec(text){
+  if(!text || !text.trim()) return [];
+  // 拆 OR：用 | 分
+  const orParts = text.split('|').map(s=>s.trim()).filter(Boolean);
+  const anyOf = [];
+  for(const p of orParts){
+    let conj = {B:0,A:0,Q:0};
+    // 允许用 + 连接（AND），例如 "B+Q"；也允许连写重复，例如 "BBQ"
+    const andToken = p.split('+').map(s=>s.trim()).filter(Boolean);
+    for(const token of andToken){
+      // 将 token 中的字母计数加和
+      for(const ch of token){
+        if(ch==='B'||ch==='A'||ch==='Q') conj[ch] = (conj[ch]||0)+1;
+      }
+    }
+    // 去掉 0
+    const cleaned={};
+    for(const k of ['B','A','Q']) if(conj[k]>0) cleaned[k]=conj[k];
+    if(Object.keys(cleaned).length>0) anyOf.push(cleaned);
+  }
+  return anyOf;
+}
+</script>
+</body>
+</html>
