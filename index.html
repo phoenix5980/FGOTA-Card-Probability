@@ -38,7 +38,7 @@
           <option value="3p-shuffle">三人 洗牌（每回合独立）</option>
           <option value="2p-shuffle">二人 洗牌（每回合独立）</option>
         </select>
-        <div class="note">不洗牌=一次抽满 15/10 张，按顺序 T1/T2/T3 分段判定；洗牌=每回合独立抽 5 张。</div>
+        <div class="note">看清楚是每轮洗牌还是共享，目前只支持一轮3T共享，多轮自己分开乘算吧。</div>
       </div>
 
       <div class="card col">
@@ -51,12 +51,12 @@
           <option value="BBAQQ" selected>BBAQQ（二红二绿）</option>
           <option value="BAQQQ">BAQQQ（三绿）</option>
         </select>
-        <div class="note">目前只按卡色（B/A/Q）建模，不区分 B1/B2、Q1/Q2、A1/A2等。</div>
+        <div class="note">目前只按卡色（B/A/Q）建模，不区分 B1/B2/B3、Q1/Q2/Q3、A1/A2/A3等。</div>
       </div>
     </div>
 
     <div class="card" id="turns-card">
-      <label>回合要求（OR-of-ANDs，预设可选）</label>
+      <label>回合要求</label>
       <div class="turns" id="turns"></div>
       <div class="note">
           自定义语法：例如 <span class="kbd">BB|BQ</span>（表示 BB 或 BQ），<span class="kbd">A+Q</span>（A 与 Q），<span class="kbd">QQ</span>（两张 Q）。多个 OR 用 <span class="kbd">|</span> 分隔；AND 用重复字母或 <span class="kbd">+</span>。
